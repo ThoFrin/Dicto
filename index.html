@@ -1,0 +1,130 @@
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f8fc">
+  <meta name="description" content="Dicto, votre assistant de dictée vocale.">
+
+  <title>Dicto — Dictée vocale</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true">d.</div>
+        <div>
+          <h1>dicto<span>.</span></h1>
+          <p>Votre voix, vos mots.</p>
+        </div>
+      </div>
+
+      <div class="language-badge">
+        <span class="language-dot"></span>
+        Français
+      </div>
+    </header>
+
+    <section class="hero">
+      <p class="eyebrow">ESPACE DE DICTÉE</p>
+      <h2>Exprimez-vous<br>librement.</h2>
+      <p class="hero-description">
+        Dictez votre texte, modifiez-le puis partagez-le en un instant.
+      </p>
+
+      <div class="microphone-area">
+        <div id="pulse" class="pulse" aria-hidden="true"></div>
+
+        <button
+          id="micButton"
+          class="mic-button"
+          type="button"
+          aria-label="Démarrer la dictée"
+          aria-pressed="false">
+          <svg viewBox="0 0 24 24"
+               width="34" height="34"
+               fill="none" stroke="currentColor"
+               stroke-width="1.8"
+               stroke-linecap="round"
+               stroke-linejoin="round"
+               aria-hidden="true">
+            <rect x="9" y="2" width="6" height="13" rx="3"></rect>
+            <path d="M5 10v2a7 7 0 0 0 14 0v-2"></path>
+            <path d="M12 19v3M9 22h6"></path>
+          </svg>
+        </button>
+      </div>
+
+      <p id="status" class="status" role="status" aria-live="polite">
+        Prêt à vous écouter
+      </p>
+      <p id="hint" class="hint">
+        Appuyez sur le microphone pour commencer
+      </p>
+
+      <div class="controls">
+        <button id="finishButton" class="button button-secondary" type="button" disabled>
+          <span aria-hidden="true">■</span>
+          Terminer
+        </button>
+
+        <button id="shareButton" class="button button-primary" type="button">
+          <svg viewBox="0 0 24 24"
+               width="19" height="19"
+               fill="none" stroke="currentColor"
+               stroke-width="1.8"
+               stroke-linecap="round"
+               stroke-linejoin="round"
+               aria-hidden="true">
+            <circle cx="18" cy="5" r="3"></circle>
+            <circle cx="6" cy="12" r="3"></circle>
+            <circle cx="18" cy="19" r="3"></circle>
+            <path d="m8.7 10.6 6.6-4.1M8.7 13.4l6.6 4.1"></path>
+          </svg>
+          Partager le texte
+        </button>
+      </div>
+    </section>
+
+    <section class="editor-card">
+      <div class="editor-header">
+        <div>
+          <h3>Mon texte</h3>
+          <p>Votre texte reste modifiable.</p>
+        </div>
+
+        <button id="clearButton" class="text-button" type="button">
+          Effacer
+        </button>
+      </div>
+
+      <label class="visually-hidden" for="transcript">
+        Texte dicté
+      </label>
+
+      <textarea
+        id="transcript"
+        placeholder="Votre texte apparaîtra ici lorsque vous commencerez à parler..."
+        spellcheck="true"
+        autocapitalize="sentences"></textarea>
+
+      <div class="editor-footer">
+        <span id="wordCount">0 mot</span>
+        <span id="charCount">0 caractère</span>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span class="footer-dot"></span>
+      <p>Simplement. Naturellement. Dicto.</p>
+    </footer>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
