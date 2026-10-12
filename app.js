@@ -325,6 +325,7 @@ function armStopWatchdog(instance) {
 // Création du moteur
 // --------------------------------------------------
 
+
 function createRecognition() {
   const instance = new SpeechRecognition();
   const thisSession = ++sessionNumber;
@@ -334,9 +335,42 @@ function createRecognition() {
   instance.interimResults = true;
   instance.maxAlternatives = 1;
 
+  console.log("[Dicto] Création de la session", thisSession);
+
+  instance.onstart = () => {
+    if (recognition !== instance) return;
+
+    console.log("[Dicto] Moteur démarré");
+    state = "listening";
+    updateInterface();
+    updateStatus(
+      "Microphone actif",
+      "Parlez maintenant. En attente du texte reconnu…"
+    );
+  };
+
+  instance.onaudiostart = () => {
+    console.log("[Dicto] Capture audio démarrée");
+  };
+
+  instance.onspeechstart = () => {
+    console.log("[Dicto] Parole détectée");
+    updateStatus("Parole détectée", "Reconnaissance en cours…");
+  };
+
+  instance.onspeechend = () => {
+    console.log("[Dicto] Fin de parole détectée");
+  };
+
   instance.onresult = (event) => {
     if (recognition !== instance) return;
     if (thisSession !== sessionNumber) return;
+
+    console.log(
+      "[Dicto] Résultat reçu",
+      "index =", event.resultIndex,
+      "nombre de résultats =", event.results.length
+    );
 
     for (
       let i = event.resultIndex;
@@ -345,6 +379,8 @@ function createRecognition() {
     ) {
       const result = event.results[i];
       const spokenText = result[0]?.transcript?.trim();
+
+      console.log("[Dicto] Texte reçu :", spokenText);
 
       if (!spokenText) continue;
 
@@ -355,61 +391,60 @@ function createRecognition() {
     }
 
     renderTranscript();
+
+    if (getSessionFinalText() || getSessionInterimText()) {
+      updateStatus("Texte reconnu", "Vous pouvez continuer à dicter.");
+    }
   };
 
   instance.onerror = (event) => {
     if (recognition !== instance) return;
 
-    console.warn("SpeechRecognition :", event.error);
+    console.error(
+      "[Dicto] Erreur de reconnaissance :",
+      event.error,
+      event.message || ""
+    );
 
     const messages = {
       "not-allowed":
-        "Autorisez le microphone dans les réglages du navigateur.",
+        "Accès au microphone refusé. Vérifiez les autorisations de Safari.",
       "service-not-allowed":
         "Le service de reconnaissance vocale est bloqué.",
       "audio-capture":
-        "Aucun microphone accessible n'a été détecté.",
+        "Le microphone n'est pas accessible.",
       "network":
-        "Interruption réseau. Tentative de reprise.",
+        "Erreur réseau du service de reconnaissance vocale.",
       "no-speech":
-        "Aucune parole détectée.",
+        "Aucune parole détectée. Parlez plus près du microphone.",
       "language-not-supported":
-        "La reconnaissance du français n'est pas disponible.",
+        "La reconnaissance vocale en français n'est pas disponible.",
       "aborted":
-        "Session de reconnaissance interrompue."
+        "La session vocale a été interrompue."
     };
 
-    const fatalErrors = [
-      "not-allowed",
-      "service-not-allowed",
-      "audio-capture",
-      "language-not-supported"
-    ];
+    const message = messages[event.error] ||
+      `Erreur vocale : ${event.error}`;
 
-    if (fatalErrors.includes(event.error)) {
+    if (
+      ["not-allowed", "service-not-allowed",
+       "audio-capture", "language-not-supported"].includes(event.error)
+    ) {
       desiredState = "idle";
       clearRestartTimer();
-      showToast(messages[event.error]);
-    } else if (
-      event.error !== "no-speech" &&
-      event.error !== "aborted"
-    ) {
-      showToast(
-        messages[event.error] ||
-        `Erreur de reconnaissance : ${event.error}`
-      );
+      showToast(message);
+    } else if (event.error !== "aborted") {
+      showToast(message);
     }
-
-    // Ne pas mettre recognition à null ici.
-    // onend reste responsable de la libération normale.
   };
 
   instance.onend = () => {
     if (recognition !== instance) return;
     if (thisSession !== sessionNumber) return;
 
-    clearStopWatchdog();
+    console.log("[Dicto] Session terminée");
 
+    clearStopWatchdog();
     commitSessionResults();
 
     recognition = null;
