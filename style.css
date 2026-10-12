@@ -1,15 +1,19 @@
 
+
 :root {
   color-scheme: light;
-  --background: #f7f8fc;
+  --background: #f5f8ff;
   --surface: #ffffff;
-  --text: #20243a;
-  --muted: #82879b;
-  --primary: #6258e8;
-  --primary-dark: #5146d5;
-  --border: #e9eaf2;
-  --success: #32a879;
-  --shadow: 0 14px 45px rgba(38, 40, 80, 0.07);
+  --text: #17233f;
+  --muted: #78859c;
+
+  /* Palette bleue Dicto */
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --border: #e1e9f5;
+  --success: #16a36a;
+
+  --shadow: 0 14px 45px rgba(30, 64, 125, 0.08);
 }
 
 * {
