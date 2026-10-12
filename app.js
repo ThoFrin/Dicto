@@ -2,7 +2,7 @@
 "use strict";
 
 // --------------------------------------------------
-// Dicto — reconnaissance vocale et gestion des sessions
+// Dicto — reconnaissance vocale avec reprise robuste
 // --------------------------------------------------
 
 const micButton = document.getElementById("micButton");
@@ -22,20 +22,29 @@ const SpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition;
 
 let recognition = null;
-let state = "idle"; // idle, listening, paused, finishing, unsupported
 
-// Intention de l'utilisateur, distincte de l'état du moteur.
+// idle, listening, paused, finishing, unsupported
+let state = "idle";
+
+// Intention de l'utilisateur.
 let desiredState = "idle";
 
-// Résultats indexés de la session courante.
-// Les résultats provisoires ne sont jamais ajoutés définitivement.
+// Cycle de vie de la session.
+let recognitionStopping = false;
+let sessionNumber = 0;
+
+// Résultats reconnus pendant la session.
 let sessionResults = [];
 let finalTranscript = "";
 
+// Temporisateurs.
 let restartTimer = null;
+let stopWatchdog = null;
 let toastTimer = null;
-let sessionNumber = 0;
-let manualEditVersion = 0;
+
+// Limitation des tentatives de redémarrage.
+let restartAttempts = 0;
+const MAX_RESTART_ATTEMPTS = 3;
 
 // --------------------------------------------------
 // Messages et affichage
@@ -48,6 +57,7 @@ function showToast(message) {
   toast.classList.add("visible");
 
   clearTimeout(toastTimer);
+
   toastTimer = setTimeout(() => {
     toast.classList.remove("visible");
   }, 3200);
@@ -77,7 +87,10 @@ function updateCounters() {
 function updateInterface() {
   const listening = state === "listening";
   const paused = state === "paused";
-  const active = listening || paused ||
+
+  const active =
+    listening ||
+    paused ||
     state === "finishing" ||
     desiredState === "listening";
 
@@ -94,8 +107,7 @@ function updateInterface() {
           : "Démarrer la dictée"
     );
 
-    micButton.disabled =
-      state === "finishing" && desiredState !== "listening";
+    micButton.disabled = state === "finishing";
   }
 
   if (pulse) {
@@ -112,11 +124,22 @@ function updateInterface() {
       "Essayez Safari sur un iPhone compatible."
     );
   } else if (state === "finishing") {
-    updateStatus("Finalisation…", "Conservation du texte reconnu.");
+    updateStatus(
+      "Finalisation…",
+      "Conservation du texte reconnu."
+    );
   } else if (listening) {
-    updateStatus("Je vous écoute…", "Appuyez pour mettre en pause.");
+    updateStatus(
+      recognitionStopping
+        ? "Reprise en cours…"
+        : "Je vous écoute…",
+      "Appuyez sur le microphone pour mettre en pause."
+    );
   } else if (paused) {
-    updateStatus("Dictée en pause", "Appuyez sur le microphone pour reprendre.");
+    updateStatus(
+      "Dictée en pause",
+      "Appuyez sur le microphone pour reprendre."
+    );
   } else {
     updateStatus(
       "Prêt à vous écouter",
@@ -126,7 +149,7 @@ function updateInterface() {
 }
 
 // --------------------------------------------------
-// Mise en forme prudente
+// Mise en forme du texte
 // --------------------------------------------------
 
 function capitalizeSentences(text) {
@@ -156,19 +179,19 @@ function appendSegment(current, segment) {
   if (!addition) return current;
   if (!current) return capitalizeSentences(addition);
 
-  // Aucun espace avant la ponctuation fermante.
   if (/^[,.;:!?%)\]}»”]/u.test(addition)) {
     return formatText(current + addition);
   }
 
-  // Pas d'espace après une ouverture de parenthèse/guillemet.
   const separator = /[(\[«“]$/u.test(current) ? "" : " ";
 
   return formatText(current + separator + addition);
 }
 
-// Reconstruit le texte à partir des résultats de la session.
-// Les résultats finaux sont conservés par index, sans duplication.
+// --------------------------------------------------
+// Résultats de reconnaissance
+// --------------------------------------------------
+
 function getSessionFinalText() {
   return sessionResults
     .filter((item) => item && item.isFinal)
@@ -189,20 +212,20 @@ function renderTranscript() {
   const finalPart = getSessionFinalText();
   const interimPart = getSessionInterimText();
 
-  const parts = [finalTranscript, finalPart, interimPart]
-    .filter(Boolean);
+  const parts = [
+    finalTranscript,
+    finalPart,
+    interimPart
+  ].filter(Boolean);
 
   transcript.value = formatText(parts.join(" "));
   updateCounters();
 
-  // Garde le curseur visuel sur le texte récent sans déplacer
-  // le curseur d'édition si l'utilisateur est en train d'écrire.
   if (document.activeElement !== transcript) {
     transcript.scrollTop = transcript.scrollHeight;
   }
 }
 
-// Consolide uniquement les résultats définitifs.
 function commitSessionResults() {
   const finalPart = getSessionFinalText();
 
@@ -211,30 +234,115 @@ function commitSessionResults() {
   }
 
   sessionResults = [];
+
   transcript.value = formatText(finalTranscript);
   updateCounters();
 }
 
 // --------------------------------------------------
-// Gestion du moteur de reconnaissance
+// Temporisateurs et fin de session
+// --------------------------------------------------
+
+function clearRestartTimer() {
+  if (restartTimer !== null) {
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  }
+}
+
+function clearStopWatchdog() {
+  if (stopWatchdog !== null) {
+    clearTimeout(stopWatchdog);
+    stopWatchdog = null;
+  }
+}
+
+function settleAfterSessionEnd() {
+  clearRestartTimer();
+  clearStopWatchdog();
+
+  if (desiredState === "listening") {
+    state = "listening";
+    updateInterface();
+    scheduleRestart(500);
+    return;
+  }
+
+  if (desiredState === "paused") {
+    state = "paused";
+  } else {
+    state = "idle";
+    desiredState = "idle";
+  }
+
+  updateInterface();
+
+  if (state === "idle") {
+    showToast("Dictée terminée.");
+  }
+}
+
+// --------------------------------------------------
+// Récupération si Safari ne déclenche pas onend
+// --------------------------------------------------
+
+function armStopWatchdog(instance) {
+  clearStopWatchdog();
+
+  // Protection contre une session bloquée lors de stop().
+  stopWatchdog = setTimeout(() => {
+    stopWatchdog = null;
+
+    if (recognition !== instance) return;
+
+    console.warn(
+      "La session tarde à se terminer. Tentative de libération."
+    );
+
+    try {
+      instance.abort();
+    } catch (error) {
+      console.warn("Interruption de la session :", error);
+    }
+
+    // Laisse un court délai au moteur pour libérer la session.
+    stopWatchdog = setTimeout(() => {
+      stopWatchdog = null;
+
+      if (recognition !== instance) return;
+
+      commitSessionResults();
+
+      recognition = null;
+      recognitionStopping = false;
+
+      settleAfterSessionEnd();
+    }, 800);
+  }, 1800);
+}
+
+// --------------------------------------------------
+// Création du moteur
 // --------------------------------------------------
 
 function createRecognition() {
   const instance = new SpeechRecognition();
+  const thisSession = ++sessionNumber;
 
   instance.lang = "fr-FR";
   instance.continuous = true;
   instance.interimResults = true;
   instance.maxAlternatives = 1;
 
-  const thisSession = ++sessionNumber;
-  const editVersionAtStart = manualEditVersion;
-
   instance.onresult = (event) => {
     if (recognition !== instance) return;
     if (thisSession !== sessionNumber) return;
 
-    for (let i = event.resultIndex; i < event.results.length; i++) {
+    for (
+      let i = event.resultIndex;
+      i < event.results.length;
+      i++
+    ) {
       const result = event.results[i];
       const spokenText = result[0]?.transcript?.trim();
 
@@ -246,14 +354,7 @@ function createRecognition() {
       };
     }
 
-    /*
-     * Si l'utilisateur modifie le texte manuellement pendant
-     * la reconnaissance, ne pas remplacer sa version par
-     * un ancien état affiché.
-     */
-    if (editVersionAtStart === manualEditVersion) {
-      renderTranscript();
-    }
+    renderTranscript();
   };
 
   instance.onerror = (event) => {
@@ -263,84 +364,81 @@ function createRecognition() {
 
     const messages = {
       "not-allowed":
-        "Autorisez l'accès au microphone dans les réglages du navigateur.",
+        "Autorisez le microphone dans les réglages du navigateur.",
       "service-not-allowed":
         "Le service de reconnaissance vocale est bloqué.",
       "audio-capture":
         "Aucun microphone accessible n'a été détecté.",
       "network":
-        "Interruption réseau. La dictée sera reprise si possible.",
+        "Interruption réseau. Tentative de reprise.",
       "no-speech":
-        "Aucune parole détectée. Vous pouvez continuer.",
+        "Aucune parole détectée.",
       "language-not-supported":
         "La reconnaissance du français n'est pas disponible.",
       "aborted":
         "Session de reconnaissance interrompue."
     };
 
-    const message = messages[event.error] ||
-      `Erreur de reconnaissance : ${event.error}`;
+    const fatalErrors = [
+      "not-allowed",
+      "service-not-allowed",
+      "audio-capture",
+      "language-not-supported"
+    ];
 
-    if (
-      event.error === "not-allowed" ||
-      event.error === "service-not-allowed" ||
-      event.error === "audio-capture" ||
-      event.error === "language-not-supported"
-    ) {
+    if (fatalErrors.includes(event.error)) {
       desiredState = "idle";
-      showToast(message);
-    } else if (event.error !== "no-speech" && event.error !== "aborted") {
-      showToast(message);
+      clearRestartTimer();
+      showToast(messages[event.error]);
+    } else if (
+      event.error !== "no-speech" &&
+      event.error !== "aborted"
+    ) {
+      showToast(
+        messages[event.error] ||
+        `Erreur de reconnaissance : ${event.error}`
+      );
     }
+
+    // Ne pas mettre recognition à null ici.
+    // onend reste responsable de la libération normale.
   };
 
   instance.onend = () => {
     if (recognition !== instance) return;
+    if (thisSession !== sessionNumber) return;
 
-    // Attendre la fin effective avant d'autoriser un nouveau start().
+    clearStopWatchdog();
+
     commitSessionResults();
+
     recognition = null;
+    recognitionStopping = false;
 
-    if (desiredState === "listening") {
-      scheduleRestart();
-      return;
-    }
-
-    clearRestartTimer();
-
-    if (desiredState === "paused") {
-      state = "paused";
-    } else {
-      state = "idle";
-      desiredState = "idle";
-    }
-
-    updateInterface();
+    settleAfterSessionEnd();
   };
 
   return instance;
 }
 
-function clearRestartTimer() {
-  if (restartTimer !== null) {
-    clearTimeout(restartTimer);
-    restartTimer = null;
-  }
-}
+// --------------------------------------------------
+// Démarrage et redémarrage
+// --------------------------------------------------
 
-function scheduleRestart() {
+function scheduleRestart(delay = 500) {
   clearRestartTimer();
 
-  if (desiredState !== "listening" || recognition) return;
+  if (desiredState !== "listening") return;
+  if (recognition) return;
 
-  // Petite temporisation pour laisser le moteur se libérer.
   restartTimer = setTimeout(() => {
     restartTimer = null;
 
-    if (desiredState === "listening" && !recognition) {
-      startRecognitionSession();
-    }
-  }, 650);
+    if (desiredState !== "listening") return;
+    if (recognition) return;
+
+    startRecognitionSession();
+  }, delay);
 }
 
 function startRecognitionSession() {
@@ -353,30 +451,35 @@ function startRecognitionSession() {
     updateInterface();
 
     showToast(
-      "La reconnaissance vocale n'est pas prise en charge par ce navigateur."
+      "La reconnaissance vocale n'est pas prise en charge."
     );
     return;
   }
 
   if (!window.isSecureContext) {
-    desiredState = "idle";
     state = "idle";
+    desiredState = "idle";
     updateInterface();
 
-    showToast("Le microphone nécessite HTTPS ou localhost.");
+    showToast("Le microphone nécessite une connexion HTTPS.");
     return;
   }
 
   let instance;
 
   try {
+    sessionResults = [];
+
     instance = createRecognition();
     recognition = instance;
+    recognitionStopping = false;
+
     state = "listening";
-    sessionResults = [];
     updateInterface();
 
     instance.start();
+
+    restartAttempts = 0;
   } catch (error) {
     console.error("Démarrage impossible :", error);
 
@@ -384,24 +487,43 @@ function startRecognitionSession() {
       recognition = null;
     }
 
+    recognitionStopping = false;
+
     if (desiredState === "listening") {
-      // Évite une boucle de démarrages immédiats.
-      state = "paused";
-      desiredState = "paused";
-      updateInterface();
-      showToast("Le microphone n'a pas démarré. Appuyez pour réessayer.");
+      restartAttempts++;
+
+      if (restartAttempts <= MAX_RESTART_ATTEMPTS) {
+        showToast("Reconnexion du microphone…");
+        scheduleRestart(1000);
+      } else {
+        desiredState = "paused";
+        state = "paused";
+        restartAttempts = 0;
+
+        updateInterface();
+
+        showToast(
+          "La reprise automatique a échoué. Appuyez pour réessayer."
+        );
+      }
     } else {
-      state = "idle";
+      state = desiredState === "paused" ? "paused" : "idle";
       updateInterface();
     }
   }
 }
 
+// --------------------------------------------------
+// Bouton microphone : démarrer, pause ou reprise
+// --------------------------------------------------
+
 function startOrResume() {
   if (!SpeechRecognition) {
     state = "unsupported";
+    desiredState = "idle";
     updateInterface();
-    showToast("La reconnaissance vocale n'est pas disponible ici.");
+
+    showToast("La reconnaissance vocale n'est pas disponible.");
     return;
   }
 
@@ -410,31 +532,50 @@ function startOrResume() {
     return;
   }
 
-  if (desiredState === "listening" && state === "listening") {
+  // Une deuxième pression pendant l'écoute demande une pause.
+  if (
+    desiredState === "listening" &&
+    state === "listening" &&
+    !recognitionStopping
+  ) {
     pauseListening();
     return;
   }
 
   clearRestartTimer();
-
+  restartAttempts = 0;
   desiredState = "listening";
 
-  // Si l'ancienne session est encore en cours d'arrêt,
-  // on attend son onend : on ne crée pas de moteur concurrent.
   if (recognition) {
+    if (recognitionStopping) {
+      // La session précédente s'arrête encore.
+      // Son onend ou le watchdog déclenchera la reprise.
+      state = "listening";
+      updateInterface();
+      return;
+    }
+
+    // Une session est déjà active : ne pas en créer une autre.
     state = "listening";
     updateInterface();
     return;
   }
 
+  state = "listening";
+  updateInterface();
   startRecognitionSession();
 }
+
+// --------------------------------------------------
+// Pause
+// --------------------------------------------------
 
 function pauseListening() {
   if (desiredState !== "listening") return;
 
   desiredState = "paused";
   state = "paused";
+
   clearRestartTimer();
   updateInterface();
 
@@ -446,24 +587,26 @@ function pauseListening() {
     return;
   }
 
+  recognitionStopping = true;
+  armStopWatchdog(currentRecognition);
+
   try {
-    /*
-     * stop() laisse au moteur la possibilité d'envoyer
-     * les derniers résultats définitifs avant onend.
-     * On conserve donc la référence jusqu'à onend.
-     */
     currentRecognition.stop();
   } catch (error) {
     console.warn("Arrêt de la session :", error);
 
-    // Si la session était déjà terminée, on attend son onend
-    // ou l'action utilisateur suivante.
+    // Le watchdog s'occupera de libérer la session si nécessaire.
   }
 }
+
+// --------------------------------------------------
+// Terminer définitivement
+// --------------------------------------------------
 
 function finishListening() {
   desiredState = "idle";
   state = "finishing";
+
   clearRestartTimer();
   updateInterface();
 
@@ -471,15 +614,18 @@ function finishListening() {
 
   if (!currentRecognition) {
     commitSessionResults();
+
     state = "idle";
     updateInterface();
     showToast("Dictée terminée.");
     return;
   }
 
+  recognitionStopping = true;
+  armStopWatchdog(currentRecognition);
+
   try {
     currentRecognition.stop();
-    // Le texte est consolidé dans onend.
     showToast("Finalisation de la dictée…");
   } catch (error) {
     console.warn("Finalisation :", error);
@@ -498,15 +644,10 @@ finishButton.addEventListener("click", finishListening);
 // --------------------------------------------------
 
 transcript.addEventListener("input", () => {
-  manualEditVersion++;
-
-  /*
-   * Une modification manuelle devient la nouvelle base.
-   * Si une session est active, ses prochains résultats
-   * restent gérés séparément.
-   */
+  // Le texte modifié devient la nouvelle base.
   finalTranscript = transcript.value;
   sessionResults = [];
+
   updateCounters();
 });
 
@@ -515,35 +656,40 @@ transcript.addEventListener("input", () => {
 // --------------------------------------------------
 
 clearButton.addEventListener("click", () => {
-  const confirmed = window.confirm("Effacer tout le texte ?");
-
-  if (!confirmed) return;
+  if (!window.confirm("Effacer tout le texte ?")) return;
 
   desiredState = "idle";
   state = "finishing";
+
   clearRestartTimer();
+  clearStopWatchdog();
 
-  const currentRecognition = recognition;
+  const oldRecognition = recognition;
 
-  if (currentRecognition) {
+  // Invalide les anciens événements avant d'interrompre la session.
+  recognition = null;
+  recognitionStopping = false;
+  sessionNumber++;
+
+  if (oldRecognition) {
     try {
-      currentRecognition.abort();
+      oldRecognition.abort();
     } catch (error) {
       console.warn("Interruption de la session :", error);
     }
   }
 
-  recognition = null;
-  sessionNumber++;
   sessionResults = [];
   finalTranscript = "";
   transcript.value = "";
-  manualEditVersion++;
+
+  restartAttempts = 0;
 
   updateCounters();
 
   state = "idle";
   updateInterface();
+
   showToast("Texte effacé.");
 });
 
@@ -575,17 +721,22 @@ shareButton.addEventListener("click", async () => {
 
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
-      showToast("Texte copié. Vous pouvez le coller dans votre e-mail.");
+
+      showToast(
+        "Texte copié. Vous pouvez le coller dans votre e-mail."
+      );
       return;
     }
 
     transcript.focus();
     transcript.select();
+
     showToast("Texte sélectionné. Copiez-le pour le partager.");
   } catch (error) {
     if (error.name === "AbortError") return;
 
     console.error("Erreur de partage :", error);
+
     showToast("Le partage a échoué. Copiez le texte manuellement.");
   }
 });
@@ -599,7 +750,10 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker
       .register("./service-worker.js")
       .catch((error) => {
-        console.error("Service worker non enregistré :", error);
+        console.error(
+          "Service worker non enregistré :",
+          error
+        );
       });
   });
 }
@@ -610,8 +764,10 @@ if ("serviceWorker" in navigator) {
 
 if (!SpeechRecognition) {
   state = "unsupported";
+  desiredState = "idle";
 } else {
   state = "idle";
+  desiredState = "idle";
 }
 
 updateCounters();
