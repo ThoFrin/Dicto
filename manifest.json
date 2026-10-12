@@ -1,0 +1,14 @@
+
+{
+  "id": "./",
+  "name": "Dicto - Dictée vocale",
+  "short_name": "Dicto",
+  "description": "Dictez, modifiez et partagez vos textes.",
+  "lang": "fr-FR",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f7f8fc",
+  "theme_color": "#f7f8fc"
+}

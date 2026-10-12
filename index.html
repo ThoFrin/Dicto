@@ -7,20 +7,21 @@
         content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f7f8fc">
   <meta name="description" content="Dicto, votre assistant de dictée vocale.">
+  <link rel="manifest" href="./manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Dicto">
 
   <title>Dicto — Dictée vocale</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
 </head>
 
-
-
     <section class="hero">
       <p class="eyebrow">ESPACE DE DICTÉE</p>
-      <h2>Exprimez-vous<br>librement.</h2>
-      <p class="hero-description">
-        Dictez votre texte, modifiez-le puis partagez-le en un instant.
-      </p>
+      <h2>Dictez votre compte-rendu, <br>modifiez-le puis partagez-le en un instant.</h2>
+     
 
       <div class="microphone-area">
         <div id="pulse" class="pulse" aria-hidden="true"></div>
@@ -46,7 +47,7 @@
       </div>
 
       <p id="status" class="status" role="status" aria-live="polite">
-        Prêt à vous écouter
+        Démarrez la dictée.
       </p>
       <p id="hint" class="hint">
         Appuyez sur le microphone pour commencer
